@@ -1,63 +1,71 @@
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
 
-def extract_headers(block_header):
-    headers = []
-    for header_div in block_header.find_all("div", recursive=False):
-        first_line_text = header_div.find_all("div")[0].get_text(strip=True)
-        second_line = header_div.find("div", class_="secondline")
-        
-        if second_line:
-            second_line_text = second_line.get_text(strip=True)
-            headers.append((first_line_text, second_line_text))  # Tuple with first and second line
-        else:
-            headers.append((first_line_text,))  # Tuple with only first line
-    
-    return headers
-
-
-
-def scrape_dlv_data(url):
+def scrape_data_from_url(url):
+    # Send a GET request to the URL
     response = requests.get(url)
+    
+    # Check if the request was successful
+    if response.status_code != 200:
+        print(f"Failed to retrieve data: {response.status_code}")
+        return pd.DataFrame()  # Return an empty DataFrame if not successful
+    
+    # Parse the HTML content
     soup = BeautifulSoup(response.text, 'html.parser')
     
-    dataframes = {}
-    heat_blocks = soup.find_all(class_=lambda x: x and (x.startswith("runblock heatblock") or x.startswith("runblock roundblock") or x.startswith("startlistblock")))
+    # Initialize a list to hold all entries
+    heat_data = []
+
+    # Find the main results table
+    results_table = soup.find('div', id='divRRPublish')
+
+    if not results_table:
+        print("Results table not found!")
+        return pd.DataFrame()  # Return an empty DataFrame if not found
+
+    # Extract the data body
+    data_body = results_table.find('tbody', id='tb_1_1Data')  # This holds participant data
+
+    if not data_body:
+        print("Data body not found!")
+        return pd.DataFrame()
+
+    # Extract all participant rows
+    rows = data_body.find_all('tr', class_='Hover LastRecordLine')
+
+    for row in rows:
+        columns = row.find_all('td')
+        if len(columns) >= 8:  # Check if there are enough columns to extract data
+            platz = columns[1].get_text(strip=True)  # Position
+            name = columns[2].get_text(strip=True)  # Name
+            jahrgang = columns[3].get_text(strip=True)  # Year of birth
+            nation_img = columns[4].find('img')  # Nation flag image
+            nation = nation_img['src'].split('/')[-1].split('.')[0] if nation_img else "Unknown"
+            verein = columns[6].get_text(strip=True)  # Club
+            zeit = columns[7].get_text(strip=True) if len(columns) > 7 else "No Time"  # Time
+            
+            # Append the extracted data to heat_data
+            heat_data.append({
+                'Platz': platz,
+                'Name': name,
+                'Jahrgang': jahrgang,
+                'Nation': nation,
+                'Verein': verein,
+                'Zeit': zeit,
+            })
+
+    # Convert to DataFrame
+    df_results = pd.DataFrame(heat_data)
     
-    for heat in heat_blocks:
-        blockname = heat.find(class_="blockname")
-        leftname = blockname.find(class_="leftname") if blockname else None
-        heat_name = leftname.get_text(strip=True) if leftname else "Unknown Heat"
-        
-        result_blocks = heat.find_all(class_="resultblock")
-        
-        for block in result_blocks:
-            block_table = block.find(class_="blocktable")
-            block_header = block_table.find(class_="blockheader")
-            headers = extract_headers(block_header)
-            
-            entries = block_table.find_all("div", recursive=False)[1:]  # Skipping the blockheader
-            heat_data = []
-            
-            for entry in entries:
-                entry_data = {}
-                columns = entry.find_all("div", recursive=False)
-
-                for i, header_tuple in enumerate(headers):
-                    column_data = columns[i].find_all("div")
-                    entry_data[header_tuple[0]] = column_data[0].get_text(" ", strip=True) if column_data else ""
-                    
-                    if len(header_tuple) == 2 and len(column_data) > 1:
-                        entry_data[header_tuple[1]] = column_data[1].get_text(" ", strip=True)
-
-                heat_data.append(entry_data)
-                
-            dataframes[heat_name] = pd.DataFrame(heat_data)
-    return dataframes
+    return df_results
 
 if __name__ == "__main__":
-    url = "https://ergebnisse.leichtathletik.de/Competitions/CurrentList/617972/12005"
-    dataframes = scrape_dlv_data(url)
-    for heat_name, df in dataframes.items():
-        print(f"Heat: {heat_name}\n", df.head(), "\n")
+    # Provide the URL of the results page you want to scrape
+    url = "https://my.raceresult.com/269418/results#240_541D19"  # Change this to your actual URL
+    df_results = scrape_data_from_url(url)
+    
+    if not df_results.empty:
+        print("Extracted Results:\n", df_results.head(), "\n")
+    else:
+        print("No results found.")
